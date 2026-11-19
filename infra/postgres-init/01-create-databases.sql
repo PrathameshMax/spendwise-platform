@@ -13,7 +13,6 @@
 --   2. the postgres-db-init one-shot container in docker-compose.yml — every
 --      start, which is what covers volumes created before a database was added.
 -- Adding a service database means adding one line here; nothing else.
-SELECT 'CREATE DATABASE auth_db' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'auth_db')\gexec
 SELECT 'CREATE DATABASE user_db' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'user_db')\gexec
 SELECT 'CREATE DATABASE transaction_db' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'transaction_db')\gexec
 SELECT 'CREATE DATABASE budget_db' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'budget_db')\gexec

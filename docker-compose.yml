@@ -299,7 +299,7 @@ services:
 
   # ---------------------------------------------------------------------
   # Milestone 9 — SpendWise's own services, each built from its own
-  # multi-stage Dockerfile (see e.g. auth-service/Dockerfile for the full
+  # multi-stage Dockerfile (see any service repository's Dockerfile for the full
   # rationale every one of them shares). `context: .` is the monorepo root,
   # not the service's own directory, because Maven's reactor needs the whole
   # tree to resolve spendwise-common via `-am`.
