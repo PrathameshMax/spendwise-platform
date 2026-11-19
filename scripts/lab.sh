@@ -3,7 +3,7 @@
 # so you never have to remember docker compose file combinations.
 #
 #   ./scripts/lab.sh start            app stack in production mode (prod,lab profiles, JSON logs, /lab/seed on)
-#   ./scripts/lab.sh start --build    same, rebuilding images first (after merging new code)
+#   ./scripts/lab.sh start --pull     same, pulling the latest service images first
 #   ./scripts/lab.sh stop             stop the app stack (containers and data kept)
 #   ./scripts/lab.sh status           what is running, and is it healthy
 #
@@ -59,8 +59,8 @@ case "${1:-}" in
     else
       echo "AppDynamics agent: off (no infra/appdynamics/appd.env)"
     fi
-    if [ "${2:-}" = "--build" ]; then
-      "${APP[@]}" up -d --build
+    if [ "${2:-}" = "--pull" ]; then
+      "${APP[@]}" pull && "${APP[@]}" up -d
     else
       "${APP[@]}" up -d
     fi

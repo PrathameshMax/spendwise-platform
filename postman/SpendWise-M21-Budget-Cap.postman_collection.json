@@ -1,0 +1,584 @@
+{
+  "info": {
+    "_postman_id": "27ae955c-7564-48e1-a601-72ab50efee7e",
+    "name": "SpendWise M21 \u00b7 Budget cap (Keycloak)",
+    "description": "Milestone 21 budget-breach saga, rewritten for Keycloak tokens. A HARD budget of 10000 on a fresh category; a 6000 expense is applied; a 5000 expense is accepted (201) and then rejected by budget-service and reversed by transaction-service. Run the folders in order with the Collection Runner.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "0 \u00b7 Setup",
+      "item": [
+        {
+          "name": "0.1 Token \u00b7 alice",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 - Keycloak issued a token', () => pm.response.to.have.status(200));",
+                  "pm.collectionVariables.set('aliceToken', pm.response.json().access_token);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{keycloakUrl}}/realms/spendwise/protocol/openid-connect/token",
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "grant_type",
+                  "value": "password",
+                  "type": "text"
+                },
+                {
+                  "key": "client_id",
+                  "value": "spendwise-dev-cli",
+                  "type": "text"
+                },
+                {
+                  "key": "scope",
+                  "value": "openid",
+                  "type": "text"
+                },
+                {
+                  "key": "username",
+                  "value": "{{aliceUser}}",
+                  "type": "text"
+                },
+                {
+                  "key": "password",
+                  "value": "{{alicePassword}}",
+                  "type": "text"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "0.2 Token \u00b7 ops-admin",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 - Keycloak issued a token', () => pm.response.to.have.status(200));",
+                  "pm.collectionVariables.set('adminToken', pm.response.json().access_token);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{keycloakUrl}}/realms/spendwise/protocol/openid-connect/token",
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "grant_type",
+                  "value": "password",
+                  "type": "text"
+                },
+                {
+                  "key": "client_id",
+                  "value": "spendwise-dev-cli",
+                  "type": "text"
+                },
+                {
+                  "key": "scope",
+                  "value": "openid",
+                  "type": "text"
+                },
+                {
+                  "key": "username",
+                  "value": "{{adminUser}}",
+                  "type": "text"
+                },
+                {
+                  "key": "password",
+                  "value": "{{adminPassword}}",
+                  "type": "text"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "0.3 alice \u00b7 GET /users/me (provisions profile)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const now = new Date();",
+                  "pm.collectionVariables.set('today', now.toISOString().slice(0, 10));",
+                  "pm.collectionVariables.set('periodMonth', now.toISOString().slice(0, 7));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{gatewayUrl}}/api/v1/users/me",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{aliceToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "0.4 ops-admin \u00b7 POST /categories (fresh category)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "pm.collectionVariables.set('m21CategoryId', pm.response.json().id);",
+                  "pm.collectionVariables.set('m21CategoryName', pm.response.json().name);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{gatewayUrl}}/api/v1/categories",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"M21 Gadgets {{$timestamp}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "0.5 alice \u00b7 POST /budgets (HARD cap 10000)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "const b = pm.response.json();",
+                  "pm.test('enforcement HARD', () => pm.expect(b.enforcement).to.eql('HARD'));",
+                  "pm.test('currentSpend starts at 0', () => pm.expect(Number(b.currentSpend)).to.eql(0));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{gatewayUrl}}/api/v1/budgets",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{aliceToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"category\": \"{{m21CategoryName}}\",\n  \"cappedAmount\": 10000,\n  \"periodMonth\": \"{{periodMonth}}\",\n  \"enforcement\": \"HARD\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "1 \u00b7 An expense within the cap is applied",
+      "item": [
+        {
+          "name": "1.1 alice \u00b7 POST /transactions 6000",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "pm.test('status POSTED', () => pm.expect(pm.response.json().status).to.eql('POSTED'));",
+                  "pm.collectionVariables.set('m21TxAllowed', pm.response.json().id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{gatewayUrl}}/api/v1/transactions",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{aliceToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"categoryId\": \"{{m21CategoryId}}\",\n  \"amount\": 6000,\n  \"type\": \"EXPENSE\",\n  \"description\": \"M21 within cap\",\n  \"transactionDate\": \"{{today}}\",\n  \"currency\": \"INR\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "1.2 alice \u00b7 budget currentSpend is 6000",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "setTimeout(() => {}, 8000); // let budget-service consume the TransactionCreatedEvent"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json().find(x => x.category === pm.collectionVariables.get('m21CategoryName'));",
+                  "pm.test('budget found', () => pm.expect(b).to.be.an('object'));",
+                  "pm.test('currentSpend = 6000', () => pm.expect(Number(b.currentSpend)).to.eql(6000));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{gatewayUrl}}/api/v1/budgets/summary?periodMonth={{periodMonth}}",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{aliceToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "1.3 ops-admin \u00b7 baseline rejections (budget-service actuator)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('metric answered (200, or 404 = none yet)', () => pm.expect([200, 404]).to.include(pm.response.code));",
+                  "const count = pm.response.code === 200 ? pm.response.json().measurements[0].value : 0;",
+                  "pm.collectionVariables.set('m21Rejected', count);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "http://localhost:8084/actuator/metrics/spendwise.saga.budget.decisions?tag=outcome:rejected",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "2 \u00b7 An expense that breaches the HARD cap",
+      "item": [
+        {
+          "name": "2.1 alice \u00b7 POST /transactions 5000 (accepted first)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "pm.test('status POSTED (compensation has not happened yet)', () => pm.expect(pm.response.json().status).to.eql('POSTED'));",
+                  "pm.collectionVariables.set('m21TxRejected', pm.response.json().id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{gatewayUrl}}/api/v1/transactions",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{aliceToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"categoryId\": \"{{m21CategoryId}}\",\n  \"amount\": 5000,\n  \"type\": \"EXPENSE\",\n  \"description\": \"M21 breaches cap\",\n  \"transactionDate\": \"{{today}}\",\n  \"currency\": \"INR\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "3 \u00b7 Compensated: rejected and reversed",
+      "item": [
+        {
+          "name": "3.1 ops-admin \u00b7 one HARD-cap rejection",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "setTimeout(() => {}, 6000); // the saga runs over Kafka"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('metric answered (200, or 404 = none yet)', () => pm.expect([200, 404]).to.include(pm.response.code));",
+                  "const count = pm.response.code === 200 ? pm.response.json().measurements[0].value : 0;",
+                  "pm.test('rejections went up by 1', () => pm.expect(count - Number(pm.collectionVariables.get('m21Rejected'))).to.eql(1));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "http://localhost:8084/actuator/metrics/spendwise.saga.budget.decisions?tag=outcome:rejected",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "3.2 alice \u00b7 ledger: 5000 REVERSED, reversing entry -5000",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const rows = pm.response.json().content;",
+                  "const allowed = rows.find(r => r.id === pm.collectionVariables.get('m21TxAllowed'));",
+                  "const rejected = rows.find(r => r.id === pm.collectionVariables.get('m21TxRejected'));",
+                  "const reversal = rows.find(r => r.reversesTransactionId === pm.collectionVariables.get('m21TxRejected'));",
+                  "pm.test('6000 entry still POSTED', () => pm.expect(allowed.status).to.eql('POSTED'));",
+                  "pm.test('5000 entry REVERSED', () => pm.expect(rejected.status).to.eql('REVERSED'));",
+                  "pm.test('reversal reason names the HARD budget', () => pm.expect(rejected.reversalReason).to.include('HARD budget'));",
+                  "pm.test('reversing entry exists, status REVERSAL', () => pm.expect(reversal.status).to.eql('REVERSAL'));",
+                  "pm.test('reversing entry amount -5000', () => pm.expect(Number(reversal.amount)).to.eql(-5000));",
+                  "pm.test('3 entries in this category', () => pm.expect(rows.length).to.eql(3));",
+                  "const sum = rows.reduce((s, r) => s + Number(r.amount), 0);",
+                  "pm.test('ledger sum 6000 (5000 and -5000 cancel)', () => pm.expect(sum).to.eql(6000));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{gatewayUrl}}/api/v1/transactions?categoryId={{m21CategoryId}}&page=0&size=20",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{aliceToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "3.3 alice \u00b7 budget currentSpend still 6000",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json().find(x => x.category === pm.collectionVariables.get('m21CategoryName'));",
+                  "pm.test('budget found', () => pm.expect(b).to.be.an('object'));",
+                  "pm.test('currentSpend = 6000', () => pm.expect(Number(b.currentSpend)).to.eql(6000));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{gatewayUrl}}/api/v1/budgets/summary?periodMonth={{periodMonth}}",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{aliceToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "gatewayUrl",
+      "value": "http://localhost:8080"
+    },
+    {
+      "key": "keycloakUrl",
+      "value": "http://localhost:8180"
+    },
+    {
+      "key": "aliceUser",
+      "value": "alice@spendwise.dev"
+    },
+    {
+      "key": "alicePassword",
+      "value": "Alice#Dev2026!"
+    },
+    {
+      "key": "adminUser",
+      "value": "ops-admin@spendwise.dev"
+    },
+    {
+      "key": "adminPassword",
+      "value": "OpsAdmin#Dev2026!"
+    },
+    {
+      "key": "aliceToken",
+      "value": ""
+    },
+    {
+      "key": "adminToken",
+      "value": ""
+    },
+    {
+      "key": "today",
+      "value": ""
+    },
+    {
+      "key": "periodMonth",
+      "value": ""
+    },
+    {
+      "key": "m21CategoryId",
+      "value": ""
+    },
+    {
+      "key": "m21CategoryName",
+      "value": ""
+    },
+    {
+      "key": "m21TxAllowed",
+      "value": ""
+    },
+    {
+      "key": "m21TxRejected",
+      "value": ""
+    },
+    {
+      "key": "m21Rejected",
+      "value": ""
+    }
+  ]
+}

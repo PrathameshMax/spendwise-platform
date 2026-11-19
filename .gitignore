@@ -31,6 +31,8 @@ Thumbs.db
 
 # Environment / secrets
 .env
+# The root .env holds only image tags (which build of each service runs), no secrets.
+!/.env
 *.env.local
 
 # Testcontainers / Docker

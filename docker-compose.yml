@@ -1,3 +1,8 @@
+# Compose project name: keeps the network, containers and volumes (database,
+# Kafka, Grafana data) the same as when this file lived in the monorepo folder
+# "spendwise", whatever folder this repository is cloned into.
+name: spendwise
+
 # Milestones 3/4/5 brought in the third-party backends our services depend on
 # (tracing, database, metrics/dashboards) while the services themselves still
 # ran on the host via `mvn spring-boot:run`. Milestone 9 is what this file's
@@ -399,8 +404,7 @@ services:
     restart: "no"
 
   discovery-server:
-    image: ghcr.io/prathameshmax/spendwise-discovery-server:main
-    pull_policy: always
+    image: ghcr.io/prathameshmax/spendwise-discovery-server:${DISCOVERY_SERVER_TAG:-main}
     container_name: spendwise-discovery-server
     ports:
       - "8761:8761"
@@ -415,8 +419,7 @@ services:
           memory: 384M
 
   config-server:
-    image: ghcr.io/prathameshmax/spendwise-config-server:main
-    pull_policy: always
+    image: ghcr.io/prathameshmax/spendwise-config-server:${CONFIG_SERVER_TAG:-main}
     container_name: spendwise-config-server
     ports:
       - "8888:8888"
@@ -433,8 +436,7 @@ services:
           memory: 384M
 
   user-service:
-    image: ghcr.io/prathameshmax/spendwise-user-service:main
-    pull_policy: always
+    image: ghcr.io/prathameshmax/spendwise-user-service:${USER_SERVICE_TAG:-main}
     container_name: spendwise-user-service
     ports:
       - "8082:8082"
@@ -467,8 +469,7 @@ services:
           memory: 512M
 
   transaction-service:
-    image: ghcr.io/prathameshmax/spendwise-transaction-service:main
-    pull_policy: always
+    image: ghcr.io/prathameshmax/spendwise-transaction-service:${TRANSACTION_SERVICE_TAG:-main}
     container_name: spendwise-transaction-service
     ports:
       - "8083:8083"
@@ -526,8 +527,7 @@ services:
           memory: 512M
 
   budget-service:
-    image: ghcr.io/prathameshmax/spendwise-budget-service:main
-    pull_policy: always
+    image: ghcr.io/prathameshmax/spendwise-budget-service:${BUDGET_SERVICE_TAG:-main}
     container_name: spendwise-budget-service
     ports:
       - "8084:8084"
@@ -607,8 +607,7 @@ services:
   notification-service:
     # Polyrepo — built and published by its own repository's CI
     # (PrathameshMax/spendwise-notification-service), no longer from this tree.
-    image: ghcr.io/prathameshmax/spendwise-notification-service:main
-    pull_policy: always
+    image: ghcr.io/prathameshmax/spendwise-notification-service:${NOTIFICATION_SERVICE_TAG:-main}
     ports:
       - "18085-18088:8085"
     environment:
@@ -657,8 +656,7 @@ services:
           memory: 512M
 
   analytics-service:
-    image: ghcr.io/prathameshmax/spendwise-analytics-service:main
-    pull_policy: always
+    image: ghcr.io/prathameshmax/spendwise-analytics-service:${ANALYTICS_SERVICE_TAG:-main}
     container_name: spendwise-analytics-service
     ports:
       - "8086:8086"
@@ -719,8 +717,7 @@ services:
           memory: 512M
 
   api-gateway:
-    image: ghcr.io/prathameshmax/spendwise-api-gateway:main
-    pull_policy: always
+    image: ghcr.io/prathameshmax/spendwise-api-gateway:${API_GATEWAY_TAG:-main}
     container_name: spendwise-api-gateway
     ports:
       - "8080:8080"
@@ -777,8 +774,7 @@ services:
   # the browser. No depends_on on purpose: with the gateway down the page
   # shows "Cannot reach the API gateway" instead of not starting at all.
   web:
-    image: ghcr.io/prathameshmax/spendwise-web:main
-    pull_policy: always
+    image: ghcr.io/prathameshmax/spendwise-web:${WEB_TAG:-main}
     container_name: spendwise-web
     ports:
       - "5173:8080"
