@@ -259,7 +259,7 @@ services:
   # token-bucket counters the Lua script underlying RedisRateLimiter maintains,
   # which are fine to lose on a restart, unlike postgres's durable application data.
   redis:
-    image: redis:7-alpine
+    image: redis:8-alpine
     container_name: spendwise-redis
     ports:
       - "6379:6379"
