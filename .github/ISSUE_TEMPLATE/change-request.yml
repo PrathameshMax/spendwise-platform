@@ -1,0 +1,118 @@
+name: Change Request
+description: Request approval to release a service to production. The release workflow reads this form.
+title: "CR: <service> <summary>"
+labels: ["change-request"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A production release runs only against an open Change Request labelled **approved**.
+        The release workflow checks every field below: the service, the exact commit (it must be
+        the build uat currently holds), and that the release runs inside the change window.
+        Editing the commit after approval invalidates the release in progress.
+
+  - type: dropdown
+    id: service
+    attributes:
+      label: Service
+      options:
+        - spendwise-discovery-server
+        - spendwise-config-server
+        - spendwise-api-gateway
+        - spendwise-user-service
+        - spendwise-transaction-service
+        - spendwise-budget-service
+        - spendwise-notification-service
+        - spendwise-analytics-service
+        - spendwise-web
+    validations:
+      required: true
+
+  - type: input
+    id: commit
+    attributes:
+      label: Commit SHA
+      description: Full 40-character commit from the "promote to uat" summary of the service's ci run.
+      placeholder: 4f2c9e1a7b3d5e6f8091a2b3c4d5e6f708192a3b
+    validations:
+      required: true
+
+  - type: dropdown
+    id: change-type
+    attributes:
+      label: Change type
+      options:
+        - Standard (pre-approved, low risk, repeatable)
+        - Normal (assessed and approved per change)
+        - Emergency (incident fix, retrospective review)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: risk
+    attributes:
+      label: Risk
+      options:
+        - Low
+        - Medium
+        - High
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What changes for customers or operations, and why. Link the pull requests.
+    validations:
+      required: true
+
+  - type: textarea
+    id: impact
+    attributes:
+      label: Impact and dependencies
+      description: Affected services, contracts (REST, Avro, gRPC), database migrations, expected downtime.
+    validations:
+      required: true
+
+  - type: textarea
+    id: implementation
+    attributes:
+      label: Implementation plan
+      description: Steps, who runs them, and the post-release checks (health, dashboards, smoke tests).
+    validations:
+      required: true
+
+  - type: textarea
+    id: rollback
+    attributes:
+      label: Rollback plan
+      description: How to back out, e.g. re-point the prod tag to the previous release's digest; database rollback if any.
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Test evidence
+      description: Links to the uat promotion, the latest DAST run against uat, SonarCloud, UAT sign-off.
+    validations:
+      required: true
+
+  - type: input
+    id: window-start
+    attributes:
+      label: Window start (UTC)
+      description: YYYY-MM-DD HH:MM in UTC (IST minus 5:30).
+      placeholder: "2026-11-21 04:30"
+    validations:
+      required: true
+
+  - type: input
+    id: window-end
+    attributes:
+      label: Window end (UTC)
+      description: YYYY-MM-DD HH:MM in UTC.
+      placeholder: "2026-11-21 06:30"
+    validations:
+      required: true

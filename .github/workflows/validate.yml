@@ -1,18 +1,42 @@
 name: validate
 
+# The platform repository holds infrastructure, not application code, so its
+# pipeline is infrastructure checks: secrets, Compose, Kubernetes manifests,
+# IaC misconfiguration, shell scripts and the Postman collections.
+
 on:
   push:
     branches: [main]
   pull_request:
 
-permissions:
-  contents: read
+permissions: {}
+
+concurrency:
+  group: validate-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  KUBECONFORM_VERSION: v0.8.0
+  KUBECONFORM_SHA256: 9bc2bffbf71f261128533edaf912153948b7ff238f9a531ae6d34466ec287883
+  KUBERNETES_VERSION: 1.31.0
+  TRIVY_VERSION: v0.70.0
 
 jobs:
+  secret-scan:
+    uses: PrathameshMax/spendwise-ci/.github/workflows/secret-scan.yml@v1
+    permissions:
+      contents: read
+      security-events: write
+
   compose:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # Every file combination scripts/lab.sh and the README use must still resolve.
       - name: Compose files resolve
@@ -26,3 +50,92 @@ jobs:
           for f in postman/*.json; do
             python3 -m json.tool "$f" > /dev/null || { echo "::error file=$f::invalid JSON"; exit 1; }
           done
+
+  kubernetes:
+    name: kubernetes manifests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install kubeconform (checksum verified)
+        run: |
+          cd "$RUNNER_TEMP"
+          curl -sSLf -o kubeconform.tar.gz \
+            "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz"
+          echo "${KUBECONFORM_SHA256}  kubeconform.tar.gz" | sha256sum --check --strict
+          tar -xzf kubeconform.tar.gz kubeconform
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+
+      # Istio resources have no schema in the default catalogue and are reported
+      # as skipped; every core Kubernetes object is validated strictly.
+      - name: Manifests match the Kubernetes API schema
+        run: |
+          kubeconform -summary -strict -ignore-missing-schemas \
+            -kubernetes-version "$KUBERNETES_VERSION" \
+            -output text infra/k8s/
+
+  iac-scan:
+    name: IaC misconfiguration scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
+        with:
+          egress-policy: audit
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Scan configuration (report)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: ${{ env.TRIVY_VERSION }}
+          scan-type: config
+          scan-ref: .
+          format: sarif
+          output: trivy-config.sarif
+          exit-code: '0'
+
+      - name: Upload findings to Code scanning
+        if: always() && hashFiles('trivy-config.sarif') != ''
+        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        with:
+          sarif_file: trivy-config.sarif
+          category: trivy-config
+
+      - name: Scan configuration (gate)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: ${{ env.TRIVY_VERSION }}
+          skip-setup-trivy: true
+          scan-type: config
+          scan-ref: .
+          severity: CRITICAL,HIGH
+          format: table
+          exit-code: '1'
+
+  shell:
+    name: shell scripts
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # shellcheck is preinstalled on ubuntu-latest.
+      - name: shellcheck
+        run: |
+          mapfile -t scripts < <(git ls-files '*.sh')
+          shellcheck --severity=warning "${scripts[@]}"

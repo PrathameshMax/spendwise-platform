@@ -1,0 +1,270 @@
+name: dast
+
+# Stage: dynamic application security testing ("Scan: DAST").
+#
+# Starts the whole platform on the runner from the images of one environment
+# (uat by default: the build that is about to be released), then runs
+# OWASP ZAP against it the way an attacker would reach it:
+#   - a passive baseline scan of the web app,
+#   - an authenticated active scan of every business API through the gateway,
+#     driven by each service's own OpenAPI document.
+# High-risk findings fail the run. A scheduled run that fails opens (or
+# updates) a "dast" issue, and the reports are kept as the test evidence a
+# Change Request links to.
+
+on:
+  schedule:
+    - cron: '30 21 * * *'   # 03:00 IST
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Image tag to scan for every service (uat, sit, dev, main or a commit SHA)
+        type: string
+        default: uat
+      fail-on:
+        description: Lowest risk that fails the run
+        type: choice
+        options: [high, medium]
+        default: high
+
+permissions: {}
+
+concurrency:
+  group: dast
+  cancel-in-progress: false
+
+env:
+  ZAP_IMAGE: ghcr.io/zaproxy/zaproxy:2.17.0
+  TAG: ${{ inputs.tag || 'uat' }}
+  FAIL_ON: ${{ inputs.fail-on || 'high' }}
+  GATEWAY: http://localhost:8080
+  WEB: http://localhost:5173
+  KEYCLOAK: http://localhost:8180
+
+jobs:
+  dast:
+    name: OWASP ZAP against ${{ inputs.tag || 'uat' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.PACKAGES_READ_TOKEN }}
+
+      # Every service image comes from the same environment tag.
+      - name: Start the platform
+        run: |
+          for var in DISCOVERY_SERVER CONFIG_SERVER USER_SERVICE TRANSACTION_SERVICE BUDGET_SERVICE \
+                     NOTIFICATION_SERVICE ANALYTICS_SERVICE API_GATEWAY WEB; do
+            echo "${var}_TAG=${TAG}" >> "$GITHUB_ENV"
+            export "${var}_TAG=${TAG}"
+          done
+          docker compose pull --quiet
+          docker compose up -d
+
+      - name: Wait until every entry point is healthy
+        run: |
+          endpoints=(
+            "$KEYCLOAK/realms/spendwise"
+            "http://localhost:8082/actuator/health"
+            "http://localhost:8083/actuator/health"
+            "http://localhost:8084/actuator/health"
+            "http://localhost:8086/actuator/health"
+            "$GATEWAY/actuator/health"
+            "$WEB/healthz"
+          )
+          deadline=$((SECONDS + 900))
+          for url in "${endpoints[@]}"; do
+            until [ "$(curl -s -o /dev/null -w '%{http_code}' "$url")" = "200" ]; do
+              if [ "$SECONDS" -ge "$deadline" ]; then
+                echo "::error::${url} not healthy after 15 minutes"
+                docker compose ps
+                exit 1
+              fi
+              sleep 10
+            done
+            echo "healthy: ${url}"
+          done
+
+      - name: Record what is under test
+        run: |
+          {
+            echo "### DAST target: \`${TAG}\` images"
+            echo "| Service | Image digest |"
+            echo "|---|---|"
+            for c in $(docker compose ps --format '{{.Service}}' | sort); do
+              image=$(docker compose ps --format '{{.Image}}' "$c")
+              case "$image" in
+                ghcr.io/prathameshmax/*)
+                  digest=$(docker image inspect "$image" --format '{{index .RepoDigests 0}}')
+                  echo "| ${c} | \`${digest}\` |" ;;
+              esac
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Keycloak issues 5-minute access tokens; an active scan takes longer. The
+      # throwaway realm on this runner gets 55 minutes (under the gateway's 1h
+      # max-token-lifetime check), so every request of the scan is authenticated.
+      - name: Lengthen token lifetime in the test realm
+        run: |
+          kc="docker compose exec -T keycloak /opt/keycloak/bin/kcadm.sh"
+          $kc config credentials --server http://localhost:8080 --realm master \
+            --user admin --password "${KEYCLOAK_ADMIN_PASSWORD:-admin}"
+          $kc update realms/spendwise -s accessTokenLifespan=3300
+
+      - name: Get tokens
+        run: |
+          token_for() {
+            curl -sf -X POST "$KEYCLOAK/realms/spendwise/protocol/openid-connect/token" \
+              -d grant_type=password -d client_id=spendwise-dev-cli -d scope=openid \
+              --data-urlencode "username=$1" --data-urlencode "password=$2" | jq -r .access_token
+          }
+          user_token=$(token_for alice@spendwise.dev 'Alice#Dev2026!')
+          admin_token=$(token_for ops-admin@spendwise.dev 'OpsAdmin#Dev2026!')
+          for t in "$user_token" "$admin_token"; do
+            if [ -z "$t" ] || [ "$t" = "null" ]; then echo "::error::Could not get a token from Keycloak"; exit 1; fi
+            echo "::add-mask::$t"
+          done
+          {
+            echo "USER_TOKEN=${user_token}"
+            echo "ADMIN_TOKEN=${admin_token}"
+          } >> "$GITHUB_ENV"
+          # The first call provisions alice's SpendWise profile, so the scan
+          # starts from a real customer rather than an empty account.
+          curl -sf "$GATEWAY/api/v1/users/me" -H "Authorization: Bearer ${user_token}" > /dev/null
+
+      # Each service's OpenAPI document, re-pointed at the gateway so the scan
+      # goes through the real edge: authentication, rate limiting, headers.
+      - name: Collect API definitions
+        run: |
+          mkdir -p zap
+          cp .zap/rules.tsv zap/rules.tsv
+          for entry in user-service:8082 transaction-service:8083 budget-service:8084 analytics-service:8086; do
+            name="${entry%%:*}"
+            port="${entry##*:}"
+            curl -sf "http://localhost:${port}/v3/api-docs" -H "Authorization: Bearer ${ADMIN_TOKEN}" > "zap/${name}.raw.json" \
+              || { echo "::error::No OpenAPI document from ${name}"; exit 1; }
+            jq --arg gw "$GATEWAY" '.servers = [{url: $gw}]' "zap/${name}.raw.json" > "zap/api-${name}.json"
+            echo "${name}: $(jq '.paths | length' "zap/api-${name}.json") paths"
+          done
+          chmod -R 777 zap
+
+      # Passive only: what a browser receives (headers, cookies, CSP, leaks).
+      - name: Baseline scan of the web app
+        run: |
+          set +e
+          docker run --rm --network host -v "$PWD/zap:/zap/wrk:rw" "$ZAP_IMAGE" \
+            zap-baseline.py -t "$WEB" -c rules.tsv -I \
+              -r report-web.html -J report-web.json
+          status=$?
+          set -e
+          if [ "$status" -gt 2 ]; then echo "::error::ZAP baseline scan errored (exit ${status})"; exit 1; fi
+
+      # Active: injection, broken auth, IDOR-style probes, error handling.
+      # One thread and a 110 ms delay keep ZAP under the gateway's 10 req/s
+      # per-user rate limit, so findings are about the API, not about 429s.
+      - name: Authenticated active scan of the APIs
+        env:
+          ZAP_AUTH_HEADER: Authorization
+          ZAP_AUTH_HEADER_SITE: localhost:8080
+        run: |
+          failed=0
+          for f in zap/api-*.json; do
+            name=$(basename "$f" .json)
+            name="${name#api-}"
+            echo "::group::${name}"
+            set +e
+            docker run --rm --network host -v "$PWD/zap:/zap/wrk:rw" \
+              -e ZAP_AUTH_HEADER -e ZAP_AUTH_HEADER_SITE \
+              -e ZAP_AUTH_HEADER_VALUE="Bearer ${USER_TOKEN}" \
+              "$ZAP_IMAGE" \
+              zap-api-scan.py -t "api-${name}.json" -f openapi -c rules.tsv -I \
+                -r "report-${name}.html" -J "report-${name}.json" \
+                -z "-config scanner.threadPerHost=1 -config scanner.delayInMs=110 -config scanner.maxScanDurationInMins=12"
+            status=$?
+            set -e
+            echo "::endgroup::"
+            if [ "$status" -gt 2 ]; then
+              echo "::error::ZAP API scan of ${name} errored (exit ${status})"
+              failed=1
+            fi
+          done
+          exit "$failed"
+
+      - name: Gate on risk
+        id: gate
+        run: |
+          python3 - <<'PY'
+          import glob, json, os, sys
+          threshold = {"high": 3, "medium": 2}[os.environ["FAIL_ON"]]
+          names = {3: "High", 2: "Medium", 1: "Low", 0: "Informational"}
+          rows, blocking = [], 0
+          for path in sorted(glob.glob("zap/report-*.json")):
+              target = path[len("zap/report-"):-len(".json")]
+              for site in json.load(open(path)).get("site", []):
+                  for alert in site.get("alerts", []):
+                      risk = int(alert.get("riskcode", 0))
+                      rows.append((risk, target, alert.get("pluginid", ""), alert.get("name", alert.get("alert", "")), int(alert.get("count", 0) or 0)))
+                      if risk >= threshold:
+                          blocking += 1
+                          print(f"::error::DAST {names[risk]}: {target} rule {alert.get('pluginid')} {alert.get('name')}")
+          rows.sort(key=lambda r: (-r[0], r[1], r[2]))
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as s:
+              s.write(f"### DAST findings (fails on {os.environ['FAIL_ON']} and above): {blocking} blocking\n\n")
+              s.write("| Risk | Target | Rule | Alert | Instances |\n|---|---|---|---|---|\n")
+              for risk, target, rule, name, count in rows:
+                  if risk >= 1:
+                      s.write(f"| {names[risk]} | {target} | {rule} | {name} | {count} |\n")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+              out.write(f"blocking={blocking}\n")
+          sys.exit(1 if blocking else 0)
+          PY
+
+      - name: Keep reports
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dast-reports-${{ env.TAG }}
+          path: zap/report-*
+          if-no-files-found: ignore
+          retention-days: 90
+
+      - name: Keep service logs
+        if: failure()
+        run: docker compose logs --no-color --timestamps > compose.log 2>&1
+
+      - name: Upload service logs
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dast-compose-logs
+          path: compose.log
+          retention-days: 14
+
+      - name: Open or update the DAST issue
+        if: failure() && github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          body="Nightly DAST against \`${TAG}\` failed on $(date -u +%F): ${run_url}"
+          gh label create dast --color B60205 --description "DAST findings" --repo "$GITHUB_REPOSITORY" 2>/dev/null || true
+          existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --label dast --state open --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body "$body"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --label dast --title "DAST: nightly scan failing on ${TAG}" --body "$body"
+          fi
+
+      - name: Stop the platform
+        if: always()
+        run: docker compose down -v --remove-orphans

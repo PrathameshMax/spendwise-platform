@@ -1,0 +1,6 @@
+# OWASP ZAP rule overrides for the DAST workflow (.github/workflows/dast.yml).
+# Format: <rule id><TAB><IGNORE|WARN><TAB><reason>
+# The pipeline gate is risk-based (High fails, Medium optionally); an IGNORE
+# here removes a rule's alerts from the reports entirely, so each entry must
+# carry the reason it does not apply, and is reviewed like any other change.
+# Rule ids: https://www.zaproxy.org/docs/alerts/

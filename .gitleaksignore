@@ -1,0 +1,4 @@
+# Reviewed false positives: Postman collection variable names (m20NotifFailures,
+# m22BreakingBody) matched by the generic-api-key rule. No credential involved.
+d0ea2c9909fc91ce6b1e670671407bb9129c35c0:postman/SpendWise.postman_collection.json:generic-api-key:315
+a9af2ba0161835ec720f99157faddcbae1cdf257:postman/SpendWise.postman_collection.json:generic-api-key:180
