@@ -47,7 +47,7 @@ services:
     restart: "no"
 
   appd-agent-permissions:
-    image: alpine:3.20
+    image: alpine:3.24
     container_name: spendwise-appd-agent-permissions
     command: ["sh", "-c", "chmod -R a+rwX /agent && ls /agent/javaagent.jar"]
     volumes:
