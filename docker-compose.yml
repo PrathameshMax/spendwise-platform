@@ -180,7 +180,7 @@ services:
   # previous one; Milestone 23 replays topics from offset 0, so every
   # historical version stays live. Loopback-only port, no auth: local dev tool.
   schema-registry:
-    image: confluentinc/cp-schema-registry:7.9.8
+    image: confluentinc/cp-schema-registry:8.4.1
     container_name: spendwise-schema-registry
     hostname: schema-registry
     ports:
