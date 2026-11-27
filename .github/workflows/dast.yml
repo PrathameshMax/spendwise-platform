@@ -26,6 +26,10 @@ on:
         type: choice
         options: [high, medium]
         default: high
+      strict:
+        description: Require every service to have the requested tag (no fallback to a lower environment)
+        type: boolean
+        default: false
 
 permissions: {}
 
@@ -60,14 +64,56 @@ jobs:
           username: ${{ github.repository_owner }}
           password: ${{ secrets.PACKAGES_READ_TOKEN }}
 
-      # Every service image comes from the same environment tag.
-      - name: Start the platform
+      # Every service comes from the requested environment tag. A service that has
+      # not been promoted that far yet (no uat image) falls back to the next
+      # environment down (uat -> sit -> main) instead of failing the whole scan;
+      # the fallback is reported as a warning and in the run summary, so the
+      # evidence always says exactly which image of each service was tested.
+      # strict: true disables the fallback (use it for release evidence).
+      - name: Resolve image tags
+        env:
+          STRICT: ${{ inputs.strict || 'false' }}
         run: |
+          case "$TAG" in
+            uat) chain="uat sit main" ;;
+            sit) chain="sit main" ;;
+            *)   chain="$TAG" ;;
+          esac
+          if [ "$STRICT" = "true" ]; then chain="$TAG"; fi
+          {
+            echo "### Images under test (requested: \`${TAG}\`, strict: ${STRICT})"
+            echo "| Service | Tag used |"
+            echo "|---|---|"
+          } >> "$GITHUB_STEP_SUMMARY"
+          missing=0
           for var in DISCOVERY_SERVER CONFIG_SERVER USER_SERVICE TRANSACTION_SERVICE BUDGET_SERVICE \
                      NOTIFICATION_SERVICE ANALYTICS_SERVICE API_GATEWAY WEB; do
-            echo "${var}_TAG=${TAG}" >> "$GITHUB_ENV"
-            export "${var}_TAG=${TAG}"
+            name="spendwise-$(echo "$var" | tr '[:upper:]_' '[:lower:]-')"
+            used=""
+            for candidate in $chain; do
+              if docker buildx imagetools inspect "ghcr.io/prathameshmax/${name}:${candidate}" > /dev/null 2>&1; then
+                used="$candidate"
+                break
+              fi
+            done
+            if [ -z "$used" ]; then
+              echo "::error::${name} has no image for any of: ${chain}"
+              echo "| ${name} | **none** |" >> "$GITHUB_STEP_SUMMARY"
+              missing=1
+              continue
+            fi
+            if [ "$used" != "$TAG" ]; then
+              echo "::warning::${name} has no '${TAG}' image yet; scanning '${used}' instead. Promote it to ${TAG}."
+              echo "| ${name} | \`${used}\` (fallback) |" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "| ${name} | \`${used}\` |" >> "$GITHUB_STEP_SUMMARY"
+            fi
+            echo "${var}_TAG=${used}" >> "$GITHUB_ENV"
           done
+          exit "$missing"
+
+      - name: Start the platform
+        run: |
           docker compose pull --quiet
           docker compose up -d
 
