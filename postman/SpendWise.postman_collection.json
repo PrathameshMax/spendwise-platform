@@ -347,6 +347,30 @@
     {
       "key": "labMonth",
       "value": ""
+    },
+    {
+      "key": "keycloakUrl",
+      "value": "http://localhost:8180"
+    },
+    {
+      "key": "labCustomerUsername",
+      "value": "lab-customer-0001"
+    },
+    {
+      "key": "labCustomerPassword",
+      "value": "LabCustomer#2026"
+    },
+    {
+      "key": "opsAdminUsername",
+      "value": "ops-admin@spendwise.dev"
+    },
+    {
+      "key": "opsAdminPassword",
+      "value": "OpsAdmin#Dev2026!"
+    },
+    {
+      "key": "opsAccessToken",
+      "value": ""
     }
   ],
   "item": [
@@ -8383,7 +8407,7 @@
     },
     {
       "name": "Production Debugging Lab",
-      "description": "Setup and checks for the Production Debugging Lab (docs/production-debugging/README.md).\n\nStart the stack with ./scripts/lab.sh start (and ./scripts/lab.sh logs-start for Kibana). Run the folders in order the first time: 0.1 seed, 0.2 until COMPLETED, 1.x once per session, 2.1 then search Kibana.",
+      "description": "Setup and checks for the Production Debugging Lab (docs/production-debugging/README.md).\n\nStart the stack with ./scripts/lab.sh start (it also creates the lab customers in Keycloak). Run the folders in order the first time: 0.1 seed, 0.2 until COMPLETED, 1.1-1.4 at the start of each session (and 1.1/1.4 again on 401), 2.1 then search Splunk or Kibana.",
       "item": [
         {
           "name": "0. Lab data (transaction-service, lab profile only)",
@@ -8505,40 +8529,62 @@
           ]
         },
         {
-          "name": "1. Your own session (via Gateway)",
-          "description": "A real registered user, so you can call the business APIs through the gateway exactly as the mobile app would.",
+          "name": "1. Sign in (Keycloak, as the mobile app does)",
+          "description": "Every business API needs a Keycloak access token (5 minutes). Send 1.1 when you start and again whenever a request returns 401.\n\nlab-customer-0001 is one of the lab customers created by the keycloak-lab-customers job on ./scripts/lab.sh start. Its Keycloak user id is 1ab5eed0-0000-0001-0000-000000000000, the same id as lab user #1 in the seeded data, so its token sees lab user #1's history. Change labCustomerUsername to lab-customer-0002..0050 for another customer (id 1ab5eed0-0000-0002-..., hex).\n\nThere is no userId in any request any more: the service takes it from the token (sub claim).",
           "item": [
             {
-              "name": "1.1 Register (via Gateway)",
+              "name": "1.1 Sign in as lab customer (Keycloak token)",
               "request": {
                 "method": "POST",
                 "header": [
                   {
                     "key": "Content-Type",
-                    "value": "application/json"
+                    "value": "application/x-www-form-urlencoded"
                   }
                 ],
                 "url": {
-                  "raw": "{{apiGatewayUrl}}/api/v1/auth/register",
+                  "raw": "{{keycloakUrl}}/realms/spendwise/protocol/openid-connect/token",
                   "host": [
-                    "{{apiGatewayUrl}}"
+                    "{{keycloakUrl}}"
                   ],
                   "path": [
-                    "api",
-                    "v1",
-                    "auth",
-                    "register"
+                    "realms",
+                    "spendwise",
+                    "protocol",
+                    "openid-connect",
+                    "token"
                   ]
                 },
-                "description": "Fresh email per run; stores accessToken.",
+                "description": "Password grant on spendwise-dev-cli, the realm's development client (the mobile app would use authorization code + PKCE; same token). Stores accessToken.",
                 "body": {
-                  "mode": "raw",
-                  "raw": "{\n  \"email\": \"lab-{{$timestamp}}@spendwise.dev\",\n  \"rawPassword\": \"ChangeMe123!\"\n}",
-                  "options": {
-                    "raw": {
-                      "language": "json"
+                  "mode": "urlencoded",
+                  "urlencoded": [
+                    {
+                      "key": "client_id",
+                      "value": "spendwise-dev-cli",
+                      "type": "text"
+                    },
+                    {
+                      "key": "grant_type",
+                      "value": "password",
+                      "type": "text"
+                    },
+                    {
+                      "key": "username",
+                      "value": "{{labCustomerUsername}}",
+                      "type": "text"
+                    },
+                    {
+                      "key": "password",
+                      "value": "{{labCustomerPassword}}",
+                      "type": "text"
+                    },
+                    {
+                      "key": "scope",
+                      "value": "openid",
+                      "type": "text"
                     }
-                  }
+                  ]
                 }
               },
               "event": [
@@ -8547,48 +8593,41 @@
                   "script": {
                     "type": "text/javascript",
                     "exec": [
-                      "pm.test('201 Created', () => pm.response.to.have.status(201));",
-                      "pm.collectionVariables.set('accessToken', pm.response.json().accessToken);"
+                      "pm.test('200 OK - token issued', () => pm.response.to.have.status(200));",
+                      "const t = pm.response.json();",
+                      "pm.collectionVariables.set('accessToken', t.access_token);",
+                      "const claims = JSON.parse(atob(t.access_token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));",
+                      "console.log(`[token] ${claims.preferred_username} sub=${claims.sub} roles=${(claims.realm_access || {}).roles} expires in ${t.expires_in}s`);",
+                      "// 401 invalid_grant: wrong password, or the user does not exist yet (lab customers are created by keycloak-lab-customers on ./scripts/lab.sh start).",
+                      "// 400 'Account is temporarily disabled': brute-force lockout after 5 quick failures; wait 1 minute."
                     ]
                   }
                 }
               ]
             },
             {
-              "name": "1.2 Create user profile (via Gateway)",
+              "name": "1.2 My profile (via Gateway)",
               "request": {
-                "method": "POST",
+                "method": "GET",
                 "header": [
-                  {
-                    "key": "Content-Type",
-                    "value": "application/json"
-                  },
                   {
                     "key": "Authorization",
                     "value": "Bearer {{accessToken}}"
                   }
                 ],
                 "url": {
-                  "raw": "{{apiGatewayUrl}}/api/v1/users",
+                  "raw": "{{apiGatewayUrl}}/api/v1/users/me",
                   "host": [
                     "{{apiGatewayUrl}}"
                   ],
                   "path": [
                     "api",
                     "v1",
-                    "users"
+                    "users",
+                    "me"
                   ]
                 },
-                "description": "Preferred currency INR, so transactions need no conversion; stores userId.",
-                "body": {
-                  "mode": "raw",
-                  "raw": "{\n  \"email\": \"lab-profile-{{$timestamp}}@spendwise.dev\",\n  \"fullName\": \"Lab Engineer\",\n  \"preferredCurrency\": \"INR\"\n}",
-                  "options": {
-                    "raw": {
-                      "language": "json"
-                    }
-                  }
-                }
+                "description": "First call creates the SpendWise profile for the signed-in customer (preferred currency INR). Stores userId (= token sub)."
               },
               "event": [
                 {
@@ -8596,22 +8635,20 @@
                   "script": {
                     "type": "text/javascript",
                     "exec": [
-                      "pm.test('201 Created', () => pm.response.to.have.status(201));",
-                      "pm.collectionVariables.set('userId', pm.response.json().id);"
+                      "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                      "const me = pm.response.json();",
+                      "pm.collectionVariables.set('userId', me.id);",
+                      "console.log(`[me] ${me.email} id=${me.id} currency=${me.preferredCurrency}`);"
                     ]
                   }
                 }
               ]
             },
             {
-              "name": "1.3 Create category (via Gateway)",
+              "name": "1.3 Pick a category (via Gateway)",
               "request": {
-                "method": "POST",
+                "method": "GET",
                 "header": [
-                  {
-                    "key": "Content-Type",
-                    "value": "application/json"
-                  },
                   {
                     "key": "Authorization",
                     "value": "Bearer {{accessToken}}"
@@ -8628,15 +8665,78 @@
                     "categories"
                   ]
                 },
-                "description": "Category names are unique, so a timestamp is appended; stores categoryId.",
-                "body": {
-                  "mode": "raw",
-                  "raw": "{\n  \"name\": \"Lab Smoke {{$timestamp}}\"\n}",
-                  "options": {
-                    "raw": {
-                      "language": "json"
-                    }
+                "description": "Creating categories is ADMIN-only; customers pick from the list. Stores the first category's id as categoryId."
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                      "const body = pm.response.json();",
+                      "const list = Array.isArray(body) ? body : (body.content || []);",
+                      "pm.test('at least one category', () => pm.expect(list.length).to.be.above(0));",
+                      "pm.collectionVariables.set('categoryId', list[0].id);",
+                      "console.log(`[categories] ${list.length} found, using ${list[0].name} (${list[0].id})`);"
+                    ]
                   }
+                }
+              ]
+            },
+            {
+              "name": "1.4 Sign in as support engineer (ops-admin token)",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/x-www-form-urlencoded"
+                  }
+                ],
+                "url": {
+                  "raw": "{{keycloakUrl}}/realms/spendwise/protocol/openid-connect/token",
+                  "host": [
+                    "{{keycloakUrl}}"
+                  ],
+                  "path": [
+                    "realms",
+                    "spendwise",
+                    "protocol",
+                    "openid-connect",
+                    "token"
+                  ]
+                },
+                "description": "ops-admin@spendwise.dev has the ADMIN role, which every /actuator/** endpoint except health, info and prometheus requires (thread dump, metrics, loggers). Stores opsAccessToken; folder 3 uses it.",
+                "body": {
+                  "mode": "urlencoded",
+                  "urlencoded": [
+                    {
+                      "key": "client_id",
+                      "value": "spendwise-dev-cli",
+                      "type": "text"
+                    },
+                    {
+                      "key": "grant_type",
+                      "value": "password",
+                      "type": "text"
+                    },
+                    {
+                      "key": "username",
+                      "value": "{{opsAdminUsername}}",
+                      "type": "text"
+                    },
+                    {
+                      "key": "password",
+                      "value": "{{opsAdminPassword}}",
+                      "type": "text"
+                    },
+                    {
+                      "key": "scope",
+                      "value": "openid",
+                      "type": "text"
+                    }
+                  ]
                 }
               },
               "event": [
@@ -8645,8 +8745,13 @@
                   "script": {
                     "type": "text/javascript",
                     "exec": [
-                      "pm.test('201 Created', () => pm.response.to.have.status(201));",
-                      "pm.collectionVariables.set('categoryId', pm.response.json().id);"
+                      "pm.test('200 OK - token issued', () => pm.response.to.have.status(200));",
+                      "const t = pm.response.json();",
+                      "pm.collectionVariables.set('opsAccessToken', t.access_token);",
+                      "const claims = JSON.parse(atob(t.access_token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));",
+                      "console.log(`[token] ${claims.preferred_username} sub=${claims.sub} roles=${(claims.realm_access || {}).roles} expires in ${t.expires_in}s`);",
+                      "// 401 invalid_grant: wrong password, or the user does not exist yet (lab customers are created by keycloak-lab-customers on ./scripts/lab.sh start).",
+                      "// 400 'Account is temporarily disabled': brute-force lockout after 5 quick failures; wait 1 minute."
                     ]
                   }
                 }
@@ -8687,10 +8792,10 @@
                     "transactions"
                   ]
                 },
-                "description": "Sends X-Correlation-ID: lab-<timestamp>. The id travels gateway -> transaction-service -> outbox -> Kafka -> budget-service and notification-service, and every service puts it in its JSON log lines.",
+                "description": "Sends X-Correlation-ID: lab-<timestamp>. The id travels gateway -> transaction-service -> outbox -> Kafka -> budget-service and notification-service, and every service puts it in its JSON log lines. The owner is the signed-in customer (token sub); run 1.1-1.3 first.",
                 "body": {
                   "mode": "raw",
-                  "raw": "{\n  \"userId\": \"{{userId}}\",\n  \"categoryId\": \"{{categoryId}}\",\n  \"amount\": 1499,\n  \"type\": \"EXPENSE\",\n  \"description\": \"UPI/CROMA/lab pipeline check\",\n  \"transactionDate\": \"{{labTxDate}}\",\n  \"currency\": \"INR\"\n}",
+                  "raw": "{\n  \"categoryId\": \"{{categoryId}}\",\n  \"amount\": 1499,\n  \"type\": \"EXPENSE\",\n  \"description\": \"UPI/CROMA/lab pipeline check\",\n  \"transactionDate\": \"{{labTxDate}}\",\n  \"currency\": \"INR\"\n}",
                   "options": {
                     "raw": {
                       "language": "json"
@@ -8725,7 +8830,7 @@
               ]
             },
             {
-              "name": "2.2 View a lab user's statement (via Gateway)",
+              "name": "2.2 View my statement (via Gateway)",
               "request": {
                 "method": "GET",
                 "header": [
@@ -8735,7 +8840,7 @@
                   }
                 ],
                 "url": {
-                  "raw": "{{apiGatewayUrl}}/api/v1/transactions?userId=1ab5eed0-0000-0001-0000-000000000000&page=0&size=20&sort=transactionDate,desc",
+                  "raw": "{{apiGatewayUrl}}/api/v1/transactions?page=0&size=20&sort=transactionDate,desc",
                   "host": [
                     "{{apiGatewayUrl}}"
                   ],
@@ -8745,10 +8850,6 @@
                     "transactions"
                   ],
                   "query": [
-                    {
-                      "key": "userId",
-                      "value": "1ab5eed0-0000-0001-0000-000000000000"
-                    },
                     {
                       "key": "page",
                       "value": "0"
@@ -8763,7 +8864,7 @@
                     }
                   ]
                 },
-                "description": "Lab user #1's latest 20 entries, read through the real API. Change the 0001 part of the userId (hex) to look at another lab user."
+                "description": "The signed-in customer's latest 20 entries. As lab-customer-0001 that is lab user #1's seeded history plus anything you created in 2.1."
               },
               "event": [
                 {
@@ -8773,7 +8874,7 @@
                     "exec": [
                       "pm.test('200 OK', () => pm.response.to.have.status(200));",
                       "const page = pm.response.json();",
-                      "console.log(`[lab] lab user #1 has ${page.totalElements} transactions`);"
+                      "console.log(`[lab] ${pm.collectionVariables.get('labCustomerUsername')} has ${page.totalElements} transactions`);"
                     ]
                   }
                 }
@@ -8783,7 +8884,7 @@
         },
         {
           "name": "3. Support tools",
-          "description": "What a support engineer can call directly during an incident (lab mode only).",
+          "description": "What a support engineer can call directly during an incident (lab mode only), signed in as ops-admin (1.4).",
           "item": [
             {
               "name": "3.1 Thread dump - transaction-service",
@@ -8793,6 +8894,10 @@
                   {
                     "key": "Accept",
                     "value": "text/plain"
+                  },
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{opsAccessToken}}"
                   }
                 ],
                 "url": {
@@ -8805,7 +8910,7 @@
                     "threaddump"
                   ]
                 },
-                "description": "Every JVM thread with its state and stack, as plain text (the jstack format). Take 2-3 dumps about 10 seconds apart: a thread stuck on the same line in every dump is blocked, not busy. Save each response (Save Response > Save to a file). Change the port to dump another servlet service: 8082 user, 8084 budget, 18085 notification. Not available on auth-service (8081)."
+                "description": "Every JVM thread with its state and stack, as plain text (the jstack format). Needs an ADMIN token: send 1.4 first (401 = token missing or expired, 403 = not ADMIN). Take 2-3 dumps about 10 seconds apart: a thread stuck on the same line in every dump is blocked, not busy. Save each response (Save Response > Save to a file). Change the port to dump another servlet service: 8082 user, 8084 budget, 18085 notification."
               },
               "event": [
                 {
@@ -8827,10 +8932,10 @@
         },
         {
           "name": "4. Home screen",
-          "description": "The mobile app's home screen card (GET /api/v1/transactions/insights/monthly), for a lab user, through the gateway.",
+          "description": "The mobile app's home screen card (GET /api/v1/transactions/insights/monthly) for the signed-in customer, through the gateway.",
           "item": [
             {
-              "name": "4.1 Monthly insights - lab user #1 (via Gateway)",
+              "name": "4.1 Monthly insights - my home screen (via Gateway)",
               "request": {
                 "method": "GET",
                 "header": [
@@ -8844,7 +8949,7 @@
                   }
                 ],
                 "url": {
-                  "raw": "{{apiGatewayUrl}}/api/v1/transactions/insights/monthly?userId=1ab5eed0-0000-0001-0000-000000000000&month={{labMonth}}",
+                  "raw": "{{apiGatewayUrl}}/api/v1/transactions/insights/monthly?month={{labMonth}}",
                   "host": [
                     "{{apiGatewayUrl}}"
                   ],
@@ -8857,16 +8962,12 @@
                   ],
                   "query": [
                     {
-                      "key": "userId",
-                      "value": "1ab5eed0-0000-0001-0000-000000000000"
-                    },
-                    {
                       "key": "month",
                       "value": "{{labMonth}}"
                     }
                   ]
                 },
-                "description": "This month's spending by category and top UPI merchants for lab user #1. Change the 0001 part of the userId (hex) for another lab user."
+                "description": "This month's spending by category and top UPI merchants for the signed-in customer (lab user #1 as lab-customer-0001)."
               },
               "event": [
                 {

@@ -78,7 +78,7 @@ case "${1:-}" in
     "${APP[@]}" --profile traffic up -d traffic-simulator
     echo
     echo "Simulating ${HOME_SCREEN_PER_MIN:-90} home-screen and ${STATEMENT_PER_MIN:-120} statement requests per minute"
-    echo "for lab users 1..${LAB_USERS:-1000}. It runs until: ./scripts/lab.sh traffic-stop"
+    echo "as lab customers 1..${LAB_USERS:-50} (real Keycloak logins, through api-gateway). It runs until: ./scripts/lab.sh traffic-stop"
     ;;
   traffic-stop)
     "${APP[@]}" --profile traffic stop traffic-simulator

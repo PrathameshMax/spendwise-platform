@@ -29,12 +29,23 @@
 #
 # 4. Prometheus loads the lab alert rules (infra/prometheus/alerts-lab.yml).
 #
-# 5. traffic-simulator (k6, infra/traffic/mobile-app.js): steady mobile-app
-#    traffic against transaction-service. Opt-in through the "traffic"
+# 5. keycloak-lab-customers (infra/keycloak-lab/lab-customers.sh): one-shot
+#    job that creates the lab customers lab-customer-0001..N in the spendwise
+#    realm (password LabCustomer#2026, role CUSTOMER) with fixed ids that match
+#    the /lab/seed test data, so their tokens see their own seeded history.
+#    Idempotent: existing users are skipped. It runs on every lab start
+#    because start-dev Keycloak loses users when its container is recreated.
+#    Same script runs unchanged as a Kubernetes Job (KEYCLOAK_URL from env).
+#
+# 6. traffic-simulator (k6, infra/traffic/mobile-app.js): steady mobile-app
+#    traffic through api-gateway, each virtual user logged in as one lab
+#    customer with a real Keycloak token. Opt-in through the "traffic"
 #    profile: ./scripts/lab.sh traffic-start / traffic-stop. Its own output
 #    carries no compose labels, so it is not shipped to Kibana or Splunk.
+#    TARGET / TOKEN_URL are plain env vars, so the same script can later be
+#    pointed at an AWS load balancer or Route 53 name.
 #
-# 6. merchant-directory (infra/partners/merchant_directory.py): stand-in for
+# 7. merchant-directory (infra/partners/merchant_directory.py): stand-in for
 #    an external partner API, reachable at http://merchant-directory:8099 on
 #    the compose network. Like a real vendor it is outside the platform: no
 #    compose log labels (not shipped), no metrics, no host port.
@@ -135,21 +146,45 @@ services:
       <<: *json-logs
       SPRING_PROFILES_ACTIVE: prod,lab
 
+  keycloak-lab-customers:
+    image: curlimages/curl:8.11.1
+    container_name: spendwise-keycloak-lab-customers
+    entrypoint: ["sh", "/keycloak-lab/lab-customers.sh"]
+    environment:
+      KEYCLOAK_URL: http://keycloak:8080
+      KEYCLOAK_REALM: spendwise
+      KEYCLOAK_ADMIN_USER: admin
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
+      LAB_CUSTOMERS: ${LAB_CUSTOMERS:-50}
+      LAB_CUSTOMER_PASSWORD: ${LAB_CUSTOMER_PASSWORD:-LabCustomer#2026}
+    volumes:
+      - ./infra/keycloak-lab:/keycloak-lab:ro
+    depends_on:
+      keycloak:
+        condition: service_healthy
+    logging: *lab-logging
+    restart: "no"
+
   traffic-simulator:
     image: grafana/k6:0.54.0
     container_name: spendwise-traffic-simulator
     profiles: ["traffic"]
     command: ["run", "/scripts/mobile-app.js"]
     environment:
-      TARGET: http://transaction-service:8083
-      LAB_USERS: ${LAB_USERS:-1000}
+      TARGET: http://api-gateway:8080
+      TOKEN_URL: http://keycloak:8080/realms/spendwise/protocol/openid-connect/token
+      # Must not exceed LAB_CUSTOMERS (the customers that exist in Keycloak).
+      LAB_USERS: ${LAB_USERS:-50}
+      LAB_CUSTOMER_PASSWORD: ${LAB_CUSTOMER_PASSWORD:-LabCustomer#2026}
       HOME_SCREEN_PER_MIN: ${HOME_SCREEN_PER_MIN:-90}
       STATEMENT_PER_MIN: ${STATEMENT_PER_MIN:-120}
     volumes:
       - ./infra/traffic:/scripts:ro
     depends_on:
-      transaction-service:
+      api-gateway:
         condition: service_healthy
+      keycloak-lab-customers:
+        condition: service_completed_successfully
     restart: "no"
 
   merchant-directory:

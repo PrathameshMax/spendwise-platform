@@ -33,7 +33,7 @@ The root cause is revealed only after a genuine attempt, or once found, to expla
 | The engineer on support uses | Only through a request (platform team / DBA) |
 |---|---|
 | Kibana, Splunk, AppDynamics, Grafana, Prometheus alerts, Zipkin | Restart or scale a service |
-| Postman: business APIs and Actuator endpoints, including `GET /actuator/threaddump` on a service's own port | Heap dump, or `jcmd`/`jstack` from inside a container |
+| Postman: business APIs with a customer token, Actuator endpoints (`GET /actuator/threaddump` on a service's own port) with the ops-admin token | Heap dump, or `jcmd`/`jstack` from inside a container |
 | Reading code and configuration in the repository | Database queries, locks, explain plans |
 | | Deploying a fix (change request + approval) |
 
@@ -47,16 +47,50 @@ tools. They are not used during an investigation unless the request was made.
 | Production mode | `docker-compose.lab.yml` | `prod,lab` profiles (root WARN, com.spendwise INFO), ECS JSON logs, compose labels on every container log |
 | Lab metrics | `config-repo/application-lab.yml` | Latency histograms (p95/p99), Tomcat thread metrics, `threaddump` endpoint |
 | Test data | `POST/GET/DELETE /lab/seed` on transaction-service (8083) | `lab` profile only; realistic Indian retail-banking ledger; lab ids start with `1ab5eed0` and are removed without touching real data |
+| Lab customers | `infra/keycloak-lab/lab-customers.sh`, job `keycloak-lab-customers` | Runs on every `lab.sh start`: creates `lab-customer-0001..0050` in Keycloak (password `LabCustomer#2026`, role CUSTOMER) with ids equal to lab users 1..50 of the seeded data. Idempotent |
 | Dashboard | Grafana http://localhost:3000, "SpendWise — Production Lab" | Firing alerts, golden signals, HikariCP pool, threads, heap/GC/CPU, Kafka lag |
 | Alerts | `infra/prometheus/alerts-lab.yml`, http://localhost:9090/alerts | 10 symptom-based rules (latency, pool, threads, CPU, GC, heap, lag, DLT, service down) |
 | Central logging (Kibana) | `infra/elk/` | Fluent Bit -> Elasticsearch -> Kibana http://localhost:5601, data view "SpendWise logs" |
 | Central logging (Splunk) | `infra/splunk/` | Same Fluent Bit pipeline -> Splunk HEC -> index `spendwise`, http://localhost:8000 (admin / SpendWiseLab#2026) |
 | Shared log pipeline | `infra/fluent-bit/pipeline.conf` | One reading/filtering/field-naming config for both platforms |
 | APM (AppDynamics) | `docker-compose.appd.yml`, `infra/appdynamics/` | SaaS trial controller; agent on api-gateway, transaction-service, notification-service |
-| Traffic | `infra/traffic/mobile-app.js` (k6), `lab.sh traffic-start/stop/status` | Steady mobile-app traffic for lab users: home screen and statement requests at a constant arrival rate; tunable with `HOME_SCREEN_PER_MIN`, `STATEMENT_PER_MIN`, `LAB_USERS` |
+| Traffic | `infra/traffic/mobile-app.js` (k6), `lab.sh traffic-start/stop/status` | Steady mobile-app traffic through api-gateway: each virtual user signs in to Keycloak as one lab customer and renews its own token; home screen and statement requests at a constant arrival rate; tunable with `HOME_SCREEN_PER_MIN`, `STATEMENT_PER_MIN`, `LAB_USERS` (max 50 unless `LAB_CUSTOMERS` is raised) |
 | External partners | `infra/partners/` (stand-ins, lab overlay) | Third-party APIs the platform depends on, e.g. MerchantDirectory at `http://merchant-directory:8099`. Outside the platform: no shipped logs, no metrics, no host port. Acting as the vendor goes through a request, like any action outside your own systems |
 | Requests | `postman/SpendWise.postman_collection.json` | Folder "Production Debugging Lab" |
 | Start / stop | `scripts/lab.sh` | `start`, `stop`, `status`, `traffic-*`, `kibana-*`, `splunk-*` |
+
+### Identity in the lab
+
+Every service validates a Keycloak JWT and takes the customer from the token
+(`sub` claim); no request carries a `userId`. Lab user #n in the seeded data
+has id `1ab5eed0-XXXX-YYYY-0000-000000000000` (n in hex, 8 digits split 4/4),
+and Keycloak user `lab-customer-000n` has exactly that id, so signing in as
+`lab-customer-0001` shows lab user #1's history.
+
+| Who | Username / password | Used for |
+|---|---|---|
+| Lab customer | `lab-customer-0001` … `0050` / `LabCustomer#2026` | Business APIs (Postman 1.1, traffic simulator) |
+| Support engineer | `ops-admin@spendwise.dev` / `OpsAdmin#Dev2026!` | `/actuator/**` beyond health/info/prometheus (Postman 1.4, 3.1) |
+
+Access tokens last 5 minutes; refresh tokens are single-use, and 5 failed
+logins in quick succession lock the user for a minute (brute-force
+protection). A burst of `LOGIN_ERROR` / `REFRESH_TOKEN_ERROR` events in the
+Keycloak log is itself an incident signal.
+
+### Moving to AWS later
+
+Everything the lab needs is configured through environment variables, so the
+same files run on EKS:
+
+| Lab piece | Docker Compose today | AWS / Kubernetes later |
+|---|---|---|
+| Service images | GHCR `ghcr.io/prathameshmax/spendwise-<svc>:${<SVC>_TAG:-main}` | ECR repository per service, Helm `image.tag` |
+| Lab customers | one-shot compose service | Kubernetes Job (same script, `KEYCLOAK_URL` = in-cluster service) |
+| Traffic | k6 container, `TARGET=http://api-gateway:8080` | k6 Job or CronJob, `TARGET` = ALB / Route 53 name, `TOKEN_URL` = Keycloak ingress |
+| Logs | Fluent Bit container -> Splunk / Elasticsearch | Fluent Bit DaemonSet -> same outputs, or CloudWatch Logs |
+| Metrics / alerts | Prometheus + Grafana containers | Same rules on kube-prometheus-stack, or CloudWatch alarms -> SNS |
+| Database / cache | postgres, redis containers | RDS PostgreSQL, ElastiCache Redis (`DB_HOST`, `REDIS_HOST`) |
+| Thread dump | Postman to `localhost:808x` | Postman through a port-forward or internal ingress, same ops-admin token |
 
 Run one log platform at a time on a 16 GB laptop: the app stack uses about
 7 GB, Elasticsearch + Kibana about 2.5 GB, Splunk about 2 GB. `lab.sh`
@@ -146,9 +180,16 @@ engineer knowing what is wrong.
 
 ### Running an incident pack
 
-1. Branch from `main` (`git checkout -b incident/inc-xx`) and merge the pack
-   there, without reading its diff. `main` stays clean until the fix exists.
-2. Follow the pack's setup steps (rebuild, traffic, data), then wait for the alert.
+1. Branch from `main` (`git checkout -b incident/inc-xx`) in each repository
+   the pack touches (usually one service repository, sometimes
+   spendwise-config or spendwise-platform) and merge the pack there, without
+   reading its diff. `main` stays clean until the fix exists.
+2. Follow the pack's setup steps, then wait for the alert. A pack that changes
+   service code means a new image, built locally like a release build:
+   `docker build --secret id=gh_token,env=GITHUB_PACKAGES_TOKEN -t ghcr.io/prathameshmax/spendwise-<svc>:inc-xx .`
+   in the service repository, then from spendwise-platform
+   `<SVC>_TAG=inc-xx ./scripts/lab.sh start` (for example
+   `TRANSACTION_SERVICE_TAG=inc-xx`).
 3. Investigate, fix and verify on the incident branch; write the report in
    `docs/production-debugging/incidents/`.
 4. Merge the branch into `main` (release + fix + report) and push.
