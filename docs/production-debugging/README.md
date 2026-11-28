@@ -103,7 +103,7 @@ ECS names become underscores: `log_level`, `service_name`, `error_type`).
 
 | Question | Kibana (KQL, Discover) | Splunk (SPL, Search & Reporting) |
 |---|---|---|
-| One request across every service | `correlationId : "lab-1729600000000"` | `index=spendwise correlationId="lab-1729600000000"` |
+| One request across every service | `correlationId : "lab-20261128-144113-533"` | `index=spendwise correlationId="lab-20261128-144113-533"` |
 | One trace (same as Zipkin) | `traceId : "<id>"` | `index=spendwise traceId="<id>"` |
 | Errors from one service | `service_name : "transaction-service" and log_level : "ERROR"` | `index=spendwise service_name="transaction-service" log_level=ERROR` |
 | Exceptions of a type | `error_type : *SQLTransientConnectionException*` | `index=spendwise error_type="*SQLTransientConnectionException*"` |
@@ -111,8 +111,10 @@ ECS names become underscores: `log_level`, `service_name`, `error_type`).
 | Error count per service, per minute | Visualize: `log_level : "ERROR"`, break down by `service_name` | `index=spendwise log_level=ERROR \| timechart span=1m count by service_name` |
 | Most frequent errors | Field statistics on `error_type` | `index=spendwise log_level=ERROR \| stats count by service_name, error_type \| sort -count` |
 
-Search a field, never the bare value: `lab-1729600000000` typed alone is
-split into `lab` and `1729600000000`, and `lab` matches every event.
+Search a field, never the bare value: `lab-20261128-144113-533` typed alone is
+split into `lab`, `20261128`, `144113`, `533`, and `lab` matches every event.
+Correlation ids must never contain a run of 13 or more digits: the services' PII
+masker treats that as an account or card number and logs `****1234` instead.
 
 ### AppDynamics setup (once)
 

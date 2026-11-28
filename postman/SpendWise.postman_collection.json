@@ -8809,7 +8809,7 @@
                   "script": {
                     "type": "text/javascript",
                     "exec": [
-                      "pm.collectionVariables.set('labCorrelationId', 'lab-' + Date.now());",
+                      "pm.collectionVariables.set('labCorrelationId', 'lab-' + new Date().toISOString().replace(/[-:]/g, '').replace('T', '-').replace('.', '-').replace('Z', ''));",
                       "// Yesterday (UTC): a date in the past for every time zone, so @PastOrPresent always passes.",
                       "pm.collectionVariables.set('labTxDate', new Date(Date.now() - 86400000).toISOString().slice(0, 10));"
                     ]
@@ -8976,7 +8976,7 @@
                     "type": "text/javascript",
                     "exec": [
                       "pm.collectionVariables.set('labMonth', new Date().toISOString().slice(0, 7));",
-                      "pm.collectionVariables.set('labCorrelationId', 'lab-' + Date.now());"
+                      "pm.collectionVariables.set('labCorrelationId', 'lab-' + new Date().toISOString().replace(/[-:]/g, '').replace('T', '-').replace('.', '-').replace('Z', ''));"
                     ]
                   }
                 },

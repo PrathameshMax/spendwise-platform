@@ -15,8 +15,10 @@
 // Constant arrival rate: requests keep arriving at the configured pace even
 // when responses slow down, exactly like real users opening the app. Slow
 // responses therefore pile up instead of slowing the simulator down.
-// Every request carries X-Correlation-ID "sim-<scenario>-<time>-<vu>-<iter>",
-// so any request can be followed in Splunk.
+// Every request carries X-Correlation-ID "sim-<scenario>-<yyyyMMdd-HHmmss-SSS UTC>-<vu>-<iter>",
+// so any request can be followed in Splunk. The time is split into short digit
+// groups on purpose: the services' PII masker turns any run of 13+ digits
+// (account/card number shape) into ****1234, which would hide a raw epoch-millis id.
 //
 // Tokens: each virtual user plays ONE lab customer (VU n -> lab customer
 // ((n-1) mod LAB_USERS) + 1), like one phone per customer, and keeps its own
@@ -144,13 +146,18 @@ function afterResponse(res) {
   }
 }
 
+// 2026-11-28T14:41:13.533Z -> 20261128-144113-533 (no digit run long enough to be masked)
+function timeStamp() {
+  return new Date().toISOString().replace(/[-:]/g, '').replace('T', '-').replace('.', '-').replace('Z', '');
+}
+
 function params(scenario, name, token) {
   return {
     timeout: '30s',
     tags: { name },
     headers: {
       Authorization: `Bearer ${token}`,
-      'X-Correlation-ID': `sim-${scenario}-${Date.now()}-${__VU}-${__ITER}`,
+      'X-Correlation-ID': `sim-${scenario}-${timeStamp()}-${__VU}-${__ITER}`,
     },
   };
 }
