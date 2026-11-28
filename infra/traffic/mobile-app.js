@@ -46,6 +46,32 @@
 //   LAB_CUSTOMER_PASSWORD  their password                (default LabCustomer#2026)
 //   HOME_SCREEN_PER_MIN, STATEMENT_PER_MIN   request rates
 //
+// Tokens: each virtual user plays ONE lab customer (VU n -> lab customer
+// ((n-1) mod LAB_USERS) + 1), like one phone per customer, and keeps its own
+// Keycloak session: it logs in on first use (password grant on the
+// spendwise-dev-cli client, the realm's only client that allows it), then
+// renews its 5-minute access token with its own refresh token shortly before
+// expiry. Two reasons this matters with the realm's settings:
+//   - refresh tokens are single-use (revokeRefreshToken, maxReuse 0), so a
+//     refresh token must never be shared between virtual users;
+//   - brute-force protection temporarily disables a user after failed logins,
+//     and concurrent fallback logins for the same customer used to trip it,
+//     so each session logs in once and then only refreshes. With at most 240
+//     virtual users (120 per scenario) over 50 customers, no customer ever has
+//     more than 5 sessions.
+// A 401 from the API drops the session, and the next request logs in again.
+//
+// Everything is configured through environment variables, so the same script
+// can later run against EKS (TARGET = the ingress or gateway service URL,
+// TOKEN_URL = Keycloak's URL there):
+//
+//   TARGET                 API base URL                  (default http://api-gateway:8080)
+//   TOKEN_URL              Keycloak token endpoint       (default http://keycloak:8080/realms/spendwise/protocol/openid-connect/token)
+//   CLIENT_ID              public client with password grant (default spendwise-dev-cli)
+//   LAB_USERS              lab customers to act as, 1..N (default 50; must not exceed LAB_CUSTOMERS)
+//   LAB_CUSTOMER_PASSWORD  their password                (default LabCustomer#2026)
+//   HOME_SCREEN_PER_MIN, STATEMENT_PER_MIN   request rates
+//
 // The simulator's own output is not shipped to Splunk: it is the outside
 // world, not part of the platform.
 
